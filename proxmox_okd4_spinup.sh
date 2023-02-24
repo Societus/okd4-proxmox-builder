@@ -7,7 +7,8 @@
 # Change FCOS & RL8 image urls to desired versions
 export FCOS="https://builds.coreos.fedoraproject.org/prod/streams/stable/builds/37.20230205.3.0/x86_64/fedora-coreos-37.20230205.3.0-qemu.x86_64.qcow2.xz"
 export RL8="https://dl.rockylinux.org/pub/rocky/8/images/x86_64/Rocky-8-GenericCloud-Base.latest.x86_64.qcow2"
-
+# proxmox node name must be set regardless if standalone or clustered
+export NODE="pve"
 export SVC_VM="101"
 export SVC_PUB_IP="1.2.3.4"
 export SVC_MASK="255.255.255.0"
@@ -46,7 +47,7 @@ sleep 60
 echo "Please wait while VM creation completes its initial boot provisioning"
 
 # schedule commands to services VM to install reprequisites and establish xrdp access
-pvesh create /nodes/<node>/qemu/101/status/current --command "sudo dnf update -y && sudo dnf install -y epel-release && sudo dnf install -y xrdp tigervnc-server bind bind-utils named qemu-guest-agent.x86_64 httpd haproxy & sudo reboot"
+pvesh create /nodes/$NODE/qemu/101/status/current --command "sudo dnf update -y && sudo dnf install -y epel-release && sudo dnf install -y xrdp tigervnc-server bind bind-utils named qemu-guest-agent.x86_64 httpd haproxy & sudo reboot"
 
 # network portion follows, will probably make separate script for this eventually
 
@@ -61,10 +62,9 @@ Then set the DNS server on the interface that has access to the internet to 127.
 
 Once DNS resolution tests good, enable haproxy and httpd (use 'sudo sed -i 's/Listen 80/Listen 8080/' /etc/httpd/conf/httpd.conf' 'sudo setsebool -P httpd_read_user_content 1' to configure httpd) then start httpd and haproxy
 
-If by this stage you get http code for Red Hat Apache, your services VM is prepared for cluster creation, and you can continue by typing entering 'yes' (yes/no)"
+If by this stage you get http code for Red Hat Apache, your services VM is prepared for cluster creation, and you can continue by typing entering 'yes', any other answers will end the script and the rest can be done by hand. (yes/no)"
 read answer
 if [ "$answer" = "yes" ]
 then
-  # Script logic here
 fi
 tput sgr0
