@@ -13,7 +13,9 @@ export VMSTORAGE="local"
 export SVC_VM="101"
 export BOOTSTRAP_VM="500"
 export CP_VM_START="501"
+export CP_VM_END="503"
 export WKR_VM_START="510"
+export WKR_VM_END="511"
 export SVC_PUB_IP="10.10.1.100"
 export SVC_MASK="255.255.255.0"
 export SVC_GW="10.10.1.1"
@@ -34,7 +36,8 @@ wget $FCOS
 
 # VM provisioning - Services VM will act as a bastion host, using cloud init for simple user management
 # Assumptions - Services VM will have 2 network interfaces, one for access to the internet, and one for access to a dedicated network containing $VMSTORAGE nodes used for egress
-
+tput setaf 2
+echo "Now creating services VM using ID $SVC_VM"
 qm create $SVC_VM --name okd4-services --memory 4096 --cores 4
 qm set $SVC_VM --net0 bridge=vmbr0,firewall=1
 qm set $SVC_VM --ipconfig0 ip=$SVC_PUB_IP,netmask=$SVC_MASK,gw=$SVC_GW
@@ -49,10 +52,11 @@ qm set $SVC_VM --sshkey $sshkey
 
 ## Bootstrap provisioning - CoreOS bootstrap is where ignition for the cluster will be hosted will be hosted for bringing nodes into consensus and fulfilling any prerequisites
 #### Bootstrap requires ignition, which can be loaded as a json to a TFTP server, which will have a section added here soon
+echo "Now creating bootstrap VM using ID $BOOTSTRAP_VM"
 qm create $BOOTSTRAP_VM --name okd4-bootstrap --memory 2048 --cores 2
 qm set $BOOTSTRAP_VM --net1 bridge=vmbr2,firewall=1
 qm set $BOOTSTRAP_VM --ipconfig1 ip=$BOOTSTRAP_IP,netmask=$SVC_MASK
-qm importdisk $BOOTSTRAP_VM Rocky-8-GenericCloud-Base.latest.x86_64.qcow2 $VMSTORAGE
+qm importdisk $BOOTSTRAP_VM fedora-coreos-37.20230205.3.0-qemu.x86_64.qcow2.xz $VMSTORAGE
 qm set $BOOTSTRAP_VM--scsi0 $VMSTORAGE:$BOOTSTRAP_VM/vm-$BOOTSTRAP_VM-disk-0.raw,discard=on,size=64G
 qm set $BOOTSTRAP_VM --ide0 cloudinit,format=qcow2
 qm set $BOOTSTRAP_VM --boot c --bootdisk scsi0
@@ -62,31 +66,51 @@ qm set $BOOTSTRAP_VM --sshkey $sshkey
 ## Container VM provisioning - CoreOS VMs act as all nodes in the cluster, OKD minimum requirements are 3 control planes and at least 2 workers. Creating and adding to a cluster requires a bootstrap VM, which can be shutdown until needed
 
 ##   Each of the following segments require filling in a number of ID of the final node to be created
-for ((controlplane=$CP_VM_START; controlplane=<503; controlplane++))
-for ((cpname=okd-control-plane-1; okd-control-plane<=3; cpname++))
+echo "Now creating control-planes using IDs between $CP_VM_START and $CP_VM_END"
+for ((controlplane=$CP_VM_START; controlplane=<$CP_VM_END; controlplane++))
+for ((cpname=okd-control-plane-1; okd-control-plane-<=3; cpname++))
 for ((cpip=10.10.2.103; cpip=<10.10.2.105; cpip++))
 qm create $controlplane --name $cpname --memory 4096 --cores 4
 qm set $controlplane --net0 bridge=vmbr2,firewall=1
 qm set $controlplane --ipconfig0 ip=$cpip,netmask=$SVC_MASK,gw=$CLU_GW
-qm importdisk $controlplane Rocky-8-GenericCloud-Base.latest.x86_64.qcow2 $VMSTORAGE
+qm importdisk $controlplane fedora-coreos-37.20230205.3.0-qemu.x86_64.qcow2.xz $VMSTORAGE
 qm set $controlplane --scsi0 $VMSTORAGE:$controlplane/vm-$controlplane-disk-0.raw,discard=on,size=64G
 qm set $controlplane --ide0 cloudinit,format=qcow2
 qm set $controlplane --boot c --bootdisk scsi0
 qm set $controlplane --ciuser $ciuser --cipassword $cipassword
 qm set $controlplane --sshkey $sshkey
 done
+echo "Now creating workers using IDs between $WKR_VM_START and $WKR_VM_END"
+for ((worker=$WKR_VM_START; worker=<$WKR_VM_END; worker++))
+for ((wkname=okd-worker-1; okd-worker-<=3; wkname++))
+for ((wkip=10.10.2.103; wkip=<10.10.2.105; wkip++))
+qm create $worker --name $wkname --memory 4096 --cores 4
+qm set $worker --net0 bridge=vmbr2,firewall=1
+qm set $worker --ipconfig0 ip=$wkip,netmask=$SVC_MASK,gw=$CLU_GW
+qm importdisk $worker fedora-coreos-37.20230205.3.0-qemu.x86_64.qcow2.xz $VMSTORAGE
+qm set $worker --scsi0 $VMSTORAGE:$controlplane/vm-$controlplane-disk-0.raw,discard=on,size=64G
+qm set $worker --ide0 cloudinit,format=qcow2
+qm set $worker --boot c --bootdisk scsi0
+qm set $worker --ciuser $ciuser --cipassword $cipassword
+qm set $worker --sshkey $sshkey
+done
 
 # start services vm and give time to provision cloud-init parameters
 qm start $SVC_VM
 sleep 60
-echo "Please wait while VM creation completes its initial boot provisioning"
+echo "Please wait while VM creation completes its initial boot provisioning, software installation, and updates"
 
 # schedule commands to services VM to install reprequisites and establish xrdp access
-pvesh create /nodes/$NODE/qemu/101/status/current --command "sudo dnf update -y && sudo dnf install -y epel-release && sudo dnf install -y xrdp tigervnc-server bind bind-utils named qemu-guest-agent.x86_64 httpd haproxy & sudo reboot"
-
-# network portion follows, will probably make separate script for this eventually
-
+echo "Your system will reboot once after installation is complete, and the script will continue"
+pvesh create /nodes/$NODE/qemu/$SVC_VM/status/current --command "sudo nmcli con mod ens18 ipv4.addresses $SVC_PUB_IP/$SVC_MASK ipv4.gateway $SVC_GW && sudo dnf install -y openssh-server && sudo systemctl enable --now sshd && sudo reboot"
 tput setaf 3
+
+ssh $sshuser@$SVC_PUB_IP << EOF
+sudo dnf update -y
+sudo dnf install -y epel-release
+sudo dnf install -y xrdp tigervnc-server bind bind-utils named qemu-guest-agent.x86_64 httpd haproxy 
+EOF
+
 echo "Once the services VM completes the install and reboot of prerequisites, use xrdp to enter the system and configure the necessary services for the cluster to function.
 
 This includes modifying the named.conf to listen from your cluster interface's IP as well as $VMSTORAGE host (and changing the name servers the hell away from Google),
@@ -103,3 +127,6 @@ if [ "$answer" = "yes" ]
 then
 fi
 tput sgr0
+done
+
+##
