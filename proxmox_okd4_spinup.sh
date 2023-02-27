@@ -124,10 +124,11 @@ sudo dnf install -y epel-release
 sudo dnf install -y xrdp tigervnc-server bind bind-utils named qemu-guest-agent.x86_64 httpd haproxy 
 EOF
 
-### configure named.conf for bind on Services VM and send to the default location for name daemon
+### configure config files for required services on Services VM and send to the appropriate locations
 # Some performance and stability increases can be had from uncommenting "listen-on-v6" for the cluster, but can present a threat to security if done here
 # If you want to use IPv6, wait until you enter the system and update /etc/named.conf for the cluster interface's ipv6 address
-
+## !!! I have somwhat of an (read:no) idea if this will work as written in the shell script, so if I am just overestimating the power of bash, you can copypasta the templates and use scp to send them to your Services VM
+## If you do have to copy the templates over manually, my attempts to automate the IP addresses and Subnet entries will need to be manually edited
 namedconf:
 "//
 // named.conf
@@ -246,6 +247,122 @@ $(echo $SVC_CLU_IP | cut -c -3)    IN    PTR    api-int.lab.okd.local.
 cat db.$NAMEDBSUB > /tmp/db.$NAMEDBSUB
 scp /tmp/db* $ciuser@$SVC_PUB_IP:/etc/named/zones
 
+haproxy.cfg:
+
+# Global settings
+#---------------------------------------------------------------------
+global
+    maxconn     20000
+    log         /dev/log local0 info
+    chroot      /var/lib/haproxy
+    pidfile     /var/run/haproxy.pid
+    user        haproxy
+    group       haproxy
+    daemon
+
+    # turn on stats unix socket
+    stats socket /var/lib/haproxy/stats
+
+#---------------------------------------------------------------------
+# common defaults that all the 'listen' and 'backend' sections will
+# use if not designated in their block
+#---------------------------------------------------------------------
+defaults
+    mode                    http
+    log                     global
+    option                  httplog
+    option                  dontlognull
+    option http-server-close
+    option forwardfor       except 127.0.0.0/8
+    option                  redispatch
+    retries                 3
+    timeout http-request    10s
+    timeout queue           1m
+    timeout connect         10s
+    timeout client          300s
+    timeout server          300s
+    timeout http-keep-alive 10s
+    timeout check           10s
+    maxconn                 20000
+
+listen stats
+    bind :9000
+    mode http
+    stats enable
+    stats uri /
+
+frontend okd4_k8s_api_fe
+    bind :6443
+    default_backend okd4_k8s_api_be
+    mode tcp
+    option tcplog
+
+backend okd4_k8s_api_be
+    balance source
+    mode tcp
+    server      okd4-bootstrap $BOOTSTRAP_IP:6443 check
+    server      okd4-control-plane-1 $(echo $cpip | cut -d "," -f 1):6443 check
+    server      okd4-control-plane-2 $(echo $cpip | cut -d "," -f 2):6443 check
+    server      okd4-control-plane-3 $(echo $cpip | cut -d "," -f 3):6443 check
+
+frontend okd4_machine_config_server_fe
+    bind :22623
+    default_backend okd4_machine_config_server_be
+    mode tcp
+    option tcplog
+
+backend okd4_machine_config_server_be
+    balance source
+    mode tcp
+    server      okd4-bootstrap $BOOTSTRAP_IP check
+    server      okd4-control-plane-1 $(echo $cpip | cut -d "," -f 1):22623 check
+    server      okd4-control-plane-2 $(echo $cpip | cut -d "," -f 2):22623 check
+    server      okd4-control-plane-3 $(echo $cpip | cut -d "," -f 3):22623 check
+
+frontend okd4_http_ingress_traffic_fe
+    bind :80
+    default_backend okd4_http_ingress_traffic_be
+    mode tcp
+    option tcplog
+
+backend okd4_http_ingress_traffic_be
+    balance sourcelittle
+    option tcplog
+
+backend okd4_https_ingress_traffic_be
+    balance source
+    mode tcp
+    server      okd4-compute-1 $(echo $wkip | cut -d "," -f 1):443 check
+    server      okd4-compute-2 $(echo $wkip | cut -d "," -f 2):443 check
+
+cat haproxy.cfg > /tmp/haproxy.cfg
+scp /tmp/haproxy.cfg $ciuser@$SVC_PUB_IP:/etc/haproxy/haproxy.cfg
+
+ssh $sshuser@$SVC_PUB_IP << EOF
+sudo systemctl enable firewalld
+sudo firewall-cmd --zone=public --add-port=53/tcp --permanent --interface=eth1
+sudo firewall-cmd --zone=public --add-port=8080/tcp --permanent --interface=eth1
+sudo firewall-cmd --zone=public --add-port=6443/tcp --permanent --interface=eth1
+sudo firewall-cmd --zone=public --add-port=22623/tcp --permanent --interface=eth1
+sudo firewall-cmd --reload
+sudo sed -i 's/Listen 80/Listen 8080/' /etc/httpd/conf/httpd.conf
+sudo setsebool -P httpd_read_user_content 1
+sudo systemctl enable httpd
+sudo systemctl start httpd
+EOF
+
+echo "test your web server function by running curl on your service VM IP address (remember to use port 8080) and enter yes, or anything else to wait and try again"
+read answer
+if [ "$answer" != "yes" ]; then
+    start_line=361
+    while true; do
+        <run script from line $start_line>
+    done
+fi
+tput sgr0
+done
+
+
 echo "Once the services VM completes the install and reboot of prerequisites, use xrdp to enter the system and configure the necessary services for the cluster to function."
 
 ##sections where scripting is nearly done
@@ -256,12 +373,6 @@ echo "Once the services VM completes the install and reboot of prerequisites, us
 #Once DNS resolution tests good, enable haproxy and httpd (use 'sudo sed -i 's/Listen 80/Listen 8080/' /etc/httpd/conf/httpd.conf' 'sudo setsebool -P httpd_read_user_content 1' to configure httpd) then start httpd and haproxy
 
 
-echo If by this stage you get http code for Red Hat Apache, your services VM is prepared for cluster creation, and you can continue by typing entering 'yes', any other answers will end the script and the rest can be done by hand. (yes/no)"
-read answer
-if [ "$answer" = "yes" ]
-then
-fi
-tput sgr0
-done
+echo "If by this stage you get http code for Red Hat Apache, your services VM is prepared for cluster creation, and this is the end of the provisioning script /n /n
+there will be a separate script written soon for cluster buildout"
 
-##
