@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# sample series of scripts leading up to shorter deployment cycle of OKD4 nodes.
+# 1st sample series of scripts leading up to shorter deployment cycle of OKD4 nodes.
 
 # Variables to set if you actually want to use this script as-is
 
