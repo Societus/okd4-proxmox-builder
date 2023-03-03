@@ -129,7 +129,7 @@ EOF
 # If you want to use IPv6, wait until you enter the system and update /etc/named.conf for the cluster interface's ipv6 address
 ## !!! I have somwhat of an (read:no) idea if this will work as written in the shell script, so if I am just overestimating the power of bash, you can copypasta the templates and use scp to send them to your Services VM
 ## If you do have to copy the templates over manually, my attempts to automate the IP addresses and Subnet entries will need to be manually edited
-namedconf:
+cat <<EOF >/tmp/named.conf
 "//
 // named.conf
 //
@@ -197,11 +197,11 @@ include "/etc/named.rfc1912.zones";
 include "/etc/named.root.key";
 include "/etc/named/named.conf.local";
 " 
-cat namedconf > /tmp/named.conf
+EOF
 
 scp /tmp/named.conf $ciuser@$SVC_VM:/etc/named.conf
 
-namedconflocal:
+cat <<EOF >/tmp/named.conf.local:
 
 
 zone "okd.local" {
@@ -213,12 +213,12 @@ zone "$NAMEDBSUB.in-addr.arpa" {
     type master;
     file "/etc/named/zones/db.$NAMEDBSUB";  ## $CLU_SUBNET subnet
 };
+EOF
 
-cat namedconf > /tmp/named.conf.local
 scp /tmp/named.conf.local $ciuser@$SVC_PUB_IP:/etc/named.conf.local
 ssh $ciuser@$SVC_PUB_IP -t mkdir /etc/named/zones
 
-db.$NAMEDBSUB:
+cat <<EOF >/tmp/db.$NAMEDBSUB:
 
 $TTL    604800
 @       IN      SOA     okd4-services.okd.local. admin.okd.local. (
@@ -244,10 +244,11 @@ $(echo $wkip | cut -d "," -f 1 | cut -c -3)    IN    PTR    okd4-compute-1.lab.o
 $(echo $wkip | cut -d "," -f 2 | cut -c -3)    IN    PTR    okd4-compute-2.lab.okd.local.
 $(echo $SVC_CLU_IP | cut -c -3)    IN    PTR    api.lab.okd.local.
 $(echo $SVC_CLU_IP | cut -c -3)    IN    PTR    api-int.lab.okd.local.
-cat db.$NAMEDBSUB > /tmp/db.$NAMEDBSUB
+EOF
+
 scp /tmp/db* $ciuser@$SVC_PUB_IP:/etc/named/zones
 
-haproxy.cfg:
+cat <<EOF >/tmp/haproxy.cfg:
 
 # Global settings
 #---------------------------------------------------------------------
@@ -335,7 +336,8 @@ backend okd4_https_ingress_traffic_be
     server      okd4-compute-1 $(echo $wkip | cut -d "," -f 1):443 check
     server      okd4-compute-2 $(echo $wkip | cut -d "," -f 2):443 check
 
-cat haproxy.cfg > /tmp/haproxy.cfg
+EOF
+
 scp /tmp/haproxy.cfg $ciuser@$SVC_PUB_IP:/etc/haproxy/haproxy.cfg
 
 ssh $sshuser@$SVC_PUB_IP << EOF
