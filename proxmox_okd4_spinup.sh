@@ -202,6 +202,7 @@ include "/etc/named.root.key";
 include "/etc/named/named.conf.local";
 " 
 EOF
+EOF
 
 scp /tmp/named.conf $ciuser@$SVC_PUB_IP:/etc/named.conf
 
@@ -217,6 +218,7 @@ zone "$NAMEDBSUB.in-addr.arpa" {
     type master;
     file "/etc/named/zones/db.$NAMEDBSUB";  ## $CLU_SUBNET subnet
 };
+EOF
 EOF
 
 scp /tmp/named.conf.local $ciuser@$SVC_PUB_IP:/etc/named.conf.local
@@ -248,6 +250,8 @@ $(echo $wkip | cut -d "," -f 1 | cut -c -3)    IN    PTR    okd4-compute-1.lab.o
 $(echo $wkip | cut -d "," -f 2 | cut -c -3)    IN    PTR    okd4-compute-2.lab.okd.local.
 $(echo $SVC_CLU_IP | cut -c -3)    IN    PTR    api.lab.okd.local.
 $(echo $SVC_CLU_IP | cut -c -3)    IN    PTR    api-int.lab.okd.local.
+EOF
+
 EOF
 
 scp /tmp/db* $ciuser@$SVC_PUB_IP:/etc/named/zones
@@ -339,6 +343,8 @@ backend okd4_https_ingress_traffic_be
     mode tcp
     server      okd4-compute-1 $(echo $wkip | cut -d "," -f 1):443 check
     server      okd4-compute-2 $(echo $wkip | cut -d "," -f 2):443 check
+
+EOF
 
 EOF
 
