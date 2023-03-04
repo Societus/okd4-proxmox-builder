@@ -34,6 +34,8 @@ export CP_IP_START="10.10.2.103"
 export CP_IP_END="10.10.2.105"
 export WK_IP_START="10.10.2.120"
 export WK_IP_END="10.10.2.121"
+##Even the community OKD requires a pull secret from https://console.redhat.com/openshift/downloads#tool-pull-secret (requires free Red Hat dev account)
+export pullsecret="xxxxxxxxxx"
 
 #global credentials variables
 export ciuser="cloudinitusername"
@@ -119,17 +121,19 @@ echo "Your system will reboot once after installation is complete, and the scrip
 pvesh create /nodes/$NODE/qemu/$SVC_VM/status/current --command "sudo nmcli con mod ens18 ipv4.addresses $SVC_PUB_IP/$SVC_MASK ipv4.gateway $SVC_GW && sudo dnf update -y && sudo dnf install -y openssh-server && sudo systemctl enable --now sshd && sudo reboot"
 tput setaf 3
 
-ssh $sshuser@$SVC_PUB_IP << EOF
+ssh $ciuser@$SVC_PUB_IP << EOF
 sudo dnf install -y epel-release
 sudo dnf install -y xrdp tigervnc-server bind bind-utils named qemu-guest-agent.x86_64 httpd haproxy 
 EOF
 
 ### configure config files for required services on Services VM and send to the appropriate locations
+# If you want a different number of nodes than the 3 control planes and 2 compute nodes, you will have to edit some of the config file entries here first
 # Some performance and stability increases can be had from uncommenting "listen-on-v6" for the cluster, but can present a threat to security if done here
 # If you want to use IPv6, wait until you enter the system and update /etc/named.conf for the cluster interface's ipv6 address
 ## !!! I have somwhat of an (read:no) idea if this will work as written in the shell script, so if I am just overestimating the power of bash, you can copypasta the templates and use scp to send them to your Services VM
 ## If you do have to copy the templates over manually, my attempts to automate the IP addresses and Subnet entries will need to be manually edited
-namedconf:
+
+cat > /tmp/named.conf << EOF 
 "//
 // named.conf
 //
@@ -197,11 +201,11 @@ include "/etc/named.rfc1912.zones";
 include "/etc/named.root.key";
 include "/etc/named/named.conf.local";
 " 
-cat namedconf > /tmp/named.conf
+EOF
 
-scp /tmp/named.conf $ciuser@$SVC_VM:/etc/named.conf
+scp /tmp/named.conf $ciuser@$SVC_PUB_IP:/etc/named.conf
 
-namedconflocal:
+cat > /tmp/named.conf.local << EOF
 
 
 zone "okd.local" {
@@ -213,12 +217,12 @@ zone "$NAMEDBSUB.in-addr.arpa" {
     type master;
     file "/etc/named/zones/db.$NAMEDBSUB";  ## $CLU_SUBNET subnet
 };
+EOF
 
-cat namedconf > /tmp/named.conf.local
 scp /tmp/named.conf.local $ciuser@$SVC_PUB_IP:/etc/named.conf.local
 ssh $ciuser@$SVC_PUB_IP -t mkdir /etc/named/zones
 
-db.$NAMEDBSUB:
+cat > /tmp/db.$NAMEDBSUB << EOF
 
 $TTL    604800
 @       IN      SOA     okd4-services.okd.local. admin.okd.local. (
@@ -244,10 +248,11 @@ $(echo $wkip | cut -d "," -f 1 | cut -c -3)    IN    PTR    okd4-compute-1.lab.o
 $(echo $wkip | cut -d "," -f 2 | cut -c -3)    IN    PTR    okd4-compute-2.lab.okd.local.
 $(echo $SVC_CLU_IP | cut -c -3)    IN    PTR    api.lab.okd.local.
 $(echo $SVC_CLU_IP | cut -c -3)    IN    PTR    api-int.lab.okd.local.
-cat db.$NAMEDBSUB > /tmp/db.$NAMEDBSUB
+EOF
+
 scp /tmp/db* $ciuser@$SVC_PUB_IP:/etc/named/zones
 
-haproxy.cfg:
+cat > /tmp/haproxy.cfg << EOF
 
 # Global settings
 #---------------------------------------------------------------------
@@ -335,10 +340,48 @@ backend okd4_https_ingress_traffic_be
     server      okd4-compute-1 $(echo $wkip | cut -d "," -f 1):443 check
     server      okd4-compute-2 $(echo $wkip | cut -d "," -f 2):443 check
 
-cat haproxy.cfg > /tmp/haproxy.cfg
+EOF
+
 scp /tmp/haproxy.cfg $ciuser@$SVC_PUB_IP:/etc/haproxy/haproxy.cfg
 
-ssh $sshuser@$SVC_PUB_IP << EOF
+cat > /tmp/install-config.yaml << EOF
+
+apiVersion: v1
+baseDomain: okd.local
+metadata:
+  name: lab
+
+compute:
+- hyperthreading: Enabled
+  name: worker
+  replicas: 0
+
+controlPlane:
+  hyperthreading: Enabled
+  name: master
+  replicas: 3
+
+networking:
+  clusterNetwork:
+  - cidr: 10.128.0.0/14 
+    hostPrefix: 23 
+  networkType: OpenShiftSDN
+  serviceNetwork: 
+  - 172.30.0.0/16
+
+platform:
+  none: {}
+
+fips: false
+
+pullSecret: '$pullsecret' 
+sshKey: '$sshkey'   
+
+EOF
+ssh -t $ciuser@$SVC_PUB_IP mkdir ~/install_dir
+scp /tmp/install-config.yaml $SVC_PUB_IP:~/install_dir/install-config.yaml
+
+ssh -t $ciuser@$SVC_PUB_IP << EOF
 sudo systemctl enable firewalld
 sudo firewall-cmd --zone=public --add-port=53/tcp --permanent --interface=eth1
 sudo firewall-cmd --zone=public --add-port=8080/tcp --permanent --interface=eth1
@@ -349,12 +392,15 @@ sudo sed -i 's/Listen 80/Listen 8080/' /etc/httpd/conf/httpd.conf
 sudo setsebool -P httpd_read_user_content 1
 sudo systemctl enable httpd
 sudo systemctl start httpd
+mkdir ./okd4 && cd ./okd4 && wget https://github.com/okd-project/okd/releases/download/4.12.0-0.okd-2023-02-18-033438/openshift-client-linux-4.12.0-0.okd-2023-02-18-033438.tar.gz && wget https://github.com/okd-project/okd/releases/download/4.12.0-0.okd-2023-02-18-033438/openshift-install-linux-4.12.0-0.okd-2023-02-18-033438.tar.gz && tar -xzvf openshift* && sudo mv kubectl oc openshift-install /usr/local/bin/
 EOF
 
-echo "test your web server function by running curl on your service VM IP address (remember to use port 8080) and enter yes, or anything else to wait and try again"
+
+
+echo "This step assumes you are using the ssh key on the computer you are running this script from, if you want to do the next steps manually, refer to services_vm_okd4_setup for the actual OKD cluster creation, but all the steps assume that the services VM ssh private key is matching the cloudinit public key, and if all that is good with you , enter yes here" 
 read answer
 if [ "$answer" != "yes" ]; then
-    start_line=361
+    start_line=403
     while true; do
         <run script from line $start_line>
     done
