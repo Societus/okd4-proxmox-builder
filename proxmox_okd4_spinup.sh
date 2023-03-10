@@ -12,10 +12,10 @@ export RL8="https://dl.rockylinux.org/pub/rocky/8/images/x86_64/Rocky-8-GenericC
 #proxmox variables
 export NODE="pve"
 export VMSTORAGE="local"
-export SVC_VM="101"
-export BOOTSTRAP_VM="500"
-export CP_VM_START="501"
-export CP_VM_END="503"
+export SVC_VM="500"
+export BOOTSTRAP_VM="501"
+export CP_VM_START="502"
+export CP_VM_END="504"
 export WKR_VM_START="510"
 export WKR_VM_END="511"
 #services VM variables
@@ -46,22 +46,54 @@ export sshkey="ssh-pubkey"
 # Ideally a minimal install of RHEL 8 or an upstream comparison, I used a cloud image of Rocky Linux 8, resized to 64GB
 
 # Download Cloud Images for services and cluster nodes 
-wget $RL8
+rl8filename=$(basename "$RL8")
+
+if [ -f "$rl8filename" ]; then
+  echo "File already exists, skipping download"
+else
+  wget "$RL8"
+fi
 qemu-img resize Rocky-8-GenericCloud-Base.latest.x86_64.qcow2 64G
-wget $FCOS
+
+fcosfilename=$(basename "$FCOS")
+
+if [ -f "$fcosfilename" ]; then
+  echo "File already exists, skipping download"
+else
+  wget "$FCOS"
+fi
+
+#generate cloud init image for login management
+cloud-init-cfg -d /tmp/ -i ./okd4ci.yaml
+
+cat > ./okd4ci.yaml << EOF
+
+#cloud-config
+hostname: ${fqdn}
+ssh_authorized_keys:
+  - ssh-rsa $sshkey
+users:
+  - name: $ciuser
+    groups: sudo
+    shell: /bin/bash
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    ssh_authorized_keys:
+      - ssh-rsa $sshkey
+EOF
+cloud-init-cfg -d /var/lib/vz/images -i ./okd4ci.yaml
 
 # VM provisioning - Services VM will act as a bastion host, using cloud init for simple user management
 # Assumptions - Services VM will have 2 network interfaces, one for access to the internet, and one for access to a dedicated network containing $VMSTORAGE nodes used for egress
 tput setaf 2
 echo "Now creating services VM using ID $SVC_VM"
-qm create $SVC_VM --name okd4-services --memory 4096 --cores 4
+qm create $SVC_VM --name okd4-services --hostname okd4-services.okd.local--memory 4096 --cores 4
+qm set $SVC_VM --ide0 virtio:/var/lib/vz/images/cloudinit.iso,cloudinit
 qm set $SVC_VM --net0 bridge=vmbr0,firewall=1
 qm set $SVC_VM --ipconfig0 ip=$SVC_PUB_IP,netmask=$SVC_MASK,gw=$SVC_GW
 qm set $SVC_VM --net1 bridge=vmbr2,firewall=1
 qm set $SVC_VM --ipconfig1 ip=$SVC_CLU_IP,netmask=$SVC_MASK
 qm importdisk $SVC_VM Rocky-8-GenericCloud-Base.latest.x86_64.qcow2 $VMSTORAGE
 qm set $SVC_VM --scsi0 $VMSTORAGE:$SVC_VM/vm-$SVC_VM-disk-0.raw,discard=on,size=64G
-qm set $SVC_VM --ide0 cloudinit,format=qcow2
 qm set $SVC_VM --boot c --bootdisk scsi0
 qm set $SVC_VM --ciuser $ciuser --cipassword $cipassword
 qm set $SVC_VM --sshkey $sshkey
@@ -74,7 +106,7 @@ qm set $BOOTSTRAP_VM --net1 bridge=vmbr2,firewall=1
 qm set $BOOTSTRAP_VM --ipconfig1 ip=$BOOTSTRAP_IP,netmask=$SVC_MASK
 qm importdisk $BOOTSTRAP_VM fedora-coreos-37.20230205.3.0-qemu.x86_64.qcow2.xz $VMSTORAGE
 qm set $BOOTSTRAP_VM--scsi0 $VMSTORAGE:$BOOTSTRAP_VM/vm-$BOOTSTRAP_VM-disk-0.raw,discard=on,size=64G
-qm set $BOOTSTRAP_VM --ide0 cloudinit,format=qcow2
+qm set $BOOTSTRAP_VM --ide0 virtio:/var/lib/vz/images/cloudinit.iso,cloudinit
 qm set $BOOTSTRAP_VM --boot c --bootdisk scsi0
 qm set $BOOTSTRAP_VM --ciuser $ciuser --cipassword $cipassword
 qm set $BOOTSTRAP_VM --sshkey $sshkey
@@ -91,7 +123,7 @@ qm set $controlplane --net0 bridge=vmbr2,firewall=1
 qm set $controlplane --ipconfig0 ip=$cpip,netmask=$SVC_MASK,gw=$CLU_GW
 qm importdisk $controlplane fedora-coreos-37.20230205.3.0-qemu.x86_64.qcow2.xz $VMSTORAGE
 qm set $controlplane --scsi0 $VMSTORAGE:$controlplane/vm-$controlplane-disk-0.raw,discard=on,size=64G
-qm set $controlplane --ide0 cloudinit,format=qcow2
+qm set $controlplane --ide0 virtio:/var/lib/vz/images/cloudinit.iso,cloudinit
 qm set $controlplane --boot c --bootdisk scsi0
 qm set $controlplane --ciuser $ciuser --cipassword $cipassword
 qm set $controlplane --sshkey $sshkey
@@ -105,7 +137,7 @@ qm set $worker --net0 bridge=vmbr2,firewall=1
 qm set $worker --ipconfig0 ip=$wkip,netmask=$SVC_MASK,gw=$CLU_GW
 qm importdisk $worker fedora-coreos-37.20230205.3.0-qemu.x86_64.qcow2.xz $VMSTORAGE
 qm set $worker --scsi0 $VMSTORAGE:$controlplane/vm-$controlplane-disk-0.raw,discard=on,size=64G
-qm set $worker --ide0 cloudinit,format=qcow2
+qm set $worker --ide0 virtio:/var/lib/vz/images/cloudinit.iso,cloudinit
 qm set $worker --boot c --bootdisk scsi0
 qm set $worker --ciuser $ciuser --cipassword $cipassword
 qm set $worker --sshkey $sshkey
