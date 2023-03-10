@@ -63,31 +63,12 @@ else
   wget "$FCOS"
 fi
 
-#generate cloud init image for login management
-cloud-init-cfg -d /tmp/ -i ./okd4ci.yaml
-
-cat > ./okd4ci.yaml << EOF
-
-#cloud-config
-hostname: ${fqdn}
-ssh_authorized_keys:
-  - ssh-rsa $sshkey
-users:
-  - name: $ciuser
-    groups: sudo
-    shell: /bin/bash
-    sudo: ALL=(ALL) NOPASSWD:ALL
-    ssh_authorized_keys:
-      - ssh-rsa $sshkey
-EOF
-cloud-init-cfg -d /var/lib/vz/images -i ./okd4ci.yaml
 
 # VM provisioning - Services VM will act as a bastion host, using cloud init for simple user management
 # Assumptions - Services VM will have 2 network interfaces, one for access to the internet, and one for access to a dedicated network containing $VMSTORAGE nodes used for egress
 tput setaf 2
 echo "Now creating services VM using ID $SVC_VM"
-qm create $SVC_VM --name okd4-services --hostname okd4-services.okd.local--memory 4096 --cores 4
-qm set $SVC_VM --ide0 virtio:/var/lib/vz/images/cloudinit.iso,cloudinit
+qm create $SVC_VM --name okd4-services --memory 4096 --cores 4
 qm set $SVC_VM --net0 bridge=vmbr0,firewall=1
 qm set $SVC_VM --ipconfig0 ip=$SVC_PUB_IP,netmask=$SVC_MASK,gw=$SVC_GW
 qm set $SVC_VM --net1 bridge=vmbr2,firewall=1
@@ -106,7 +87,6 @@ qm set $BOOTSTRAP_VM --net1 bridge=vmbr2,firewall=1
 qm set $BOOTSTRAP_VM --ipconfig1 ip=$BOOTSTRAP_IP,netmask=$SVC_MASK
 qm importdisk $BOOTSTRAP_VM fedora-coreos-37.20230205.3.0-qemu.x86_64.qcow2.xz $VMSTORAGE
 qm set $BOOTSTRAP_VM--scsi0 $VMSTORAGE:$BOOTSTRAP_VM/vm-$BOOTSTRAP_VM-disk-0.raw,discard=on,size=64G
-qm set $BOOTSTRAP_VM --ide0 virtio:/var/lib/vz/images/cloudinit.iso,cloudinit
 qm set $BOOTSTRAP_VM --boot c --bootdisk scsi0
 qm set $BOOTSTRAP_VM --ciuser $ciuser --cipassword $cipassword
 qm set $BOOTSTRAP_VM --sshkey $sshkey
@@ -123,7 +103,6 @@ qm set $controlplane --net0 bridge=vmbr2,firewall=1
 qm set $controlplane --ipconfig0 ip=$cpip,netmask=$SVC_MASK,gw=$CLU_GW
 qm importdisk $controlplane fedora-coreos-37.20230205.3.0-qemu.x86_64.qcow2.xz $VMSTORAGE
 qm set $controlplane --scsi0 $VMSTORAGE:$controlplane/vm-$controlplane-disk-0.raw,discard=on,size=64G
-qm set $controlplane --ide0 virtio:/var/lib/vz/images/cloudinit.iso,cloudinit
 qm set $controlplane --boot c --bootdisk scsi0
 qm set $controlplane --ciuser $ciuser --cipassword $cipassword
 qm set $controlplane --sshkey $sshkey
@@ -137,7 +116,6 @@ qm set $worker --net0 bridge=vmbr2,firewall=1
 qm set $worker --ipconfig0 ip=$wkip,netmask=$SVC_MASK,gw=$CLU_GW
 qm importdisk $worker fedora-coreos-37.20230205.3.0-qemu.x86_64.qcow2.xz $VMSTORAGE
 qm set $worker --scsi0 $VMSTORAGE:$controlplane/vm-$controlplane-disk-0.raw,discard=on,size=64G
-qm set $worker --ide0 virtio:/var/lib/vz/images/cloudinit.iso,cloudinit
 qm set $worker --boot c --bootdisk scsi0
 qm set $worker --ciuser $ciuser --cipassword $cipassword
 qm set $worker --sshkey $sshkey
