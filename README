@@ -1,4 +1,7 @@
 Abandon all hope, ye who enter here.
 
-Do not expect this to work, as I only just started to play with this. 
+Do not expect this to work, as I only just started to play with this. Even if this looks like it might actual work as a shell script, it is not intended to work that way.
+I have torn it apart several times to be used as a template in a combination python & terraform script that will make up the first actual release.
 Expect the readme to change and an actual release or version number when you can actually use these in a fundamental way.
+
+Once again, This is not an actual script yet, it is a glorified sequential template, made only because I am more familliar with bash scripting than any formal language, use at your own folly.
